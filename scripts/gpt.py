@@ -1,19 +1,28 @@
+from dataclasses import dataclass
+
 import torch
 from torch import nn
 from torch.nn import functional as F
 
-# hyperparameters
+# training hyperparameters
 batch_size = 64  # independent sequences processed in parallel
-block_size = 256  # maximum context length
 max_iters = 5000
 eval_interval = 500
 learning_rate = 3e-4
 device = "mps" if torch.mps.is_available() else "cpu"
 eval_iters = 200
-n_embed = 128
-n_head = 4
-n_layer = 4
-dropout = 0.2
+
+
+# model hyperparameters
+@dataclass
+class GPTConfig:
+    vocab_size: int
+    block_size: int = 256  # maximum context length
+    n_embed: int = 128
+    n_head: int = 4
+    n_layer: int = 4
+    dropout: float = 0.2
+
 
 torch.manual_seed(1337)
 
@@ -32,6 +41,8 @@ decode = lambda l: "".join(
     [itos[i] for i in l]
 )  # decoder: take a list of integers, output a string
 
+config = GPTConfig(vocab_size=vocab_size)
+
 # train and test splits
 data = torch.tensor(encode(text), dtype=torch.long)
 n = int(0.9 * len(data))
@@ -42,6 +53,7 @@ val_data = data[n:]
 # data loading
 def get_batch(split: str) -> tuple[torch.Tensor, torch.Tensor]:
     data = train_data if split == "train" else val_data
+    block_size = config.block_size
     ix = torch.randint(len(data) - block_size, (batch_size,))
     x = torch.stack([data[i : i + block_size] for i in ix])
     y = torch.stack([data[i + 1 : i + block_size + 1] for i in ix])
@@ -68,13 +80,15 @@ def estimate_loss():
 class Head(nn.Module):
     tril: torch.Tensor
 
-    def __init__(self, head_size: int) -> None:
+    def __init__(self, config: GPTConfig, head_size: int) -> None:
         super().__init__()
-        self.key = nn.Linear(n_embed, head_size, bias=False)
-        self.query = nn.Linear(n_embed, head_size, bias=False)
-        self.value = nn.Linear(n_embed, head_size, bias=False)
-        self.register_buffer("tril", torch.tril(torch.ones(block_size, block_size)))
-        self.dropout = nn.Dropout(dropout)
+        self.key = nn.Linear(config.n_embed, head_size, bias=False)
+        self.query = nn.Linear(config.n_embed, head_size, bias=False)
+        self.value = nn.Linear(config.n_embed, head_size, bias=False)
+        self.register_buffer(
+            "tril", torch.tril(torch.ones(config.block_size, config.block_size))
+        )
+        self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         T = x.shape[1]
@@ -95,11 +109,13 @@ class Head(nn.Module):
 
 # multiple heads of self-attention in parallel
 class MultiHeadAttention(nn.Module):
-    def __init__(self, num_heads: int, head_size: int) -> None:
+    def __init__(self, config: GPTConfig, head_size: int) -> None:
         super().__init__()
-        self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
-        self.proj = nn.Linear(n_embed, n_embed)
-        self.dropout = nn.Dropout(dropout)
+        self.heads = nn.ModuleList(
+            [Head(config, head_size) for _ in range(config.n_head)]
+        )
+        self.proj = nn.Linear(config.n_embed, config.n_embed)
+        self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         out = torch.cat([h(x) for h in self.heads], dim=-1)
@@ -109,13 +125,13 @@ class MultiHeadAttention(nn.Module):
 
 # simple linear layer followed by non-linearity
 class FeedForward(nn.Module):
-    def __init__(self, n_embed: int) -> None:
+    def __init__(self, config: GPTConfig) -> None:
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(n_embed, 4 * n_embed),
+            nn.Linear(config.n_embed, 4 * config.n_embed),
             nn.ReLU(),
-            nn.Linear(4 * n_embed, n_embed),
-            nn.Dropout(dropout),
+            nn.Linear(4 * config.n_embed, config.n_embed),
+            nn.Dropout(config.dropout),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -124,13 +140,13 @@ class FeedForward(nn.Module):
 
 # transformer block
 class Block(nn.Module):
-    def __init__(self, n_embed: int, n_head: int) -> None:
+    def __init__(self, config: GPTConfig) -> None:
         super().__init__()
-        head_size = n_embed // n_head
-        self.sa = MultiHeadAttention(n_head, head_size)
-        self.ffwd = FeedForward(n_embed)
-        self.ln1 = nn.LayerNorm(n_embed)
-        self.ln2 = nn.LayerNorm(n_embed)
+        head_size = config.n_embed // config.n_head
+        self.sa = MultiHeadAttention(config, head_size)
+        self.ffwd = FeedForward(config)
+        self.ln1 = nn.LayerNorm(config.n_embed)
+        self.ln2 = nn.LayerNorm(config.n_embed)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = x + self.sa(self.ln1(x))
@@ -139,16 +155,15 @@ class Block(nn.Module):
 
 
 class GPT(nn.Module):
-    def __init__(self) -> None:
+    def __init__(self, config: GPTConfig) -> None:
         super().__init__()
+        self.config = config
         # read off logits for the next token using lookup table
-        self.token_embedding_table = nn.Embedding(vocab_size, n_embed)
-        self.position_embedding_table = nn.Embedding(block_size, n_embed)
-        self.blocks = nn.Sequential(
-            *[Block(n_embed, n_head=n_head) for _ in range(n_layer)]
-        )
-        self.ln_f = nn.LayerNorm(n_embed)  # final layer norm
-        self.lm_head = nn.Linear(n_embed, vocab_size)
+        self.token_embedding_table = nn.Embedding(config.vocab_size, config.n_embed)
+        self.position_embedding_table = nn.Embedding(config.block_size, config.n_embed)
+        self.blocks = nn.Sequential(*[Block(config) for _ in range(config.n_layer)])
+        self.ln_f = nn.LayerNorm(config.n_embed)  # final layer norm
+        self.lm_head = nn.Linear(config.n_embed, config.vocab_size)
 
     def forward(
         self, idx: torch.Tensor, targets: torch.Tensor | None = None
@@ -158,7 +173,7 @@ class GPT(nn.Module):
         # idx and targets are both (B,T) tensor of integers
         tok_emb = self.token_embedding_table(idx)  # (B, T, C)
         pos_emb = self.position_embedding_table(
-            torch.arange(T, device=device)
+            torch.arange(T, device=idx.device)
         )  # (T, C)
         x = tok_emb + pos_emb  # (B, T, C)
         x = self.blocks(x)  # (B, T, C)
@@ -179,7 +194,7 @@ class GPT(nn.Module):
         # idx is (B, T) array of indices in current context
         for _ in range(max_new_tokens):
             # crop idx to the last block_size tokens
-            idx_cond = idx[:, -block_size:]
+            idx_cond = idx[:, -self.config.block_size :]
             # get predictions
             logits, _ = self(idx_cond)
             # focus only on last time step
@@ -193,7 +208,7 @@ class GPT(nn.Module):
         return idx
 
 
-model = GPT()
+model = GPT(config)
 model = model.to(device)
 
 # create PyTorch optimizer
