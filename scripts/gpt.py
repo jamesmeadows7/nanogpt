@@ -24,27 +24,32 @@ class GPTConfig:
     dropout: float = 0.2
 
 
+class CharTokeniser:
+    def __init__(self, text: str) -> None:
+        chars = sorted(set(text))
+        self.vocab_size = len(chars)
+        self.stoi = {ch: i for i, ch in enumerate(chars)}
+        self.itos = {i: ch for i, ch in enumerate(chars)}
+
+    def encode(self, s: str) -> list[int]:
+        # take a string, output list of integers
+        return [self.stoi[c] for c in s]
+
+    def decode(self, ids: list[int]) -> str:
+        # take a list of integers, output a string
+        return "".join(self.itos[i] for i in ids)
+
+
 torch.manual_seed(1337)
 
 with open("data/tinyshakespeare.txt", "r", encoding="utf-8") as f:
     text = f.read()
 
-chars = sorted(set(text))
-vocab_size = len(chars)
-# create a mapping from characters to integers
-stoi = {ch: i for i, ch in enumerate(chars)}
-itos = {i: ch for i, ch in enumerate(chars)}
-encode = lambda s: [
-    stoi[c] for c in s
-]  # encoder: take a string, output list of integers
-decode = lambda l: "".join(
-    [itos[i] for i in l]
-)  # decoder: take a list of integers, output a string
-
-config = GPTConfig(vocab_size=vocab_size)
+tokeniser = CharTokeniser(text)
+config = GPTConfig(vocab_size=tokeniser.vocab_size)
 
 # train and test splits
-data = torch.tensor(encode(text), dtype=torch.long)
+data = torch.tensor(tokeniser.encode(text), dtype=torch.long)
 n = int(0.9 * len(data))
 train_data = data[:n]
 val_data = data[n:]
@@ -233,4 +238,4 @@ for iter in range(max_iters):
 
 # generate from model
 context = torch.zeros((1, 1), dtype=torch.long, device=device)
-print(decode(model.generate(context, max_new_tokens=500)[0].tolist()))
+print(tokeniser.decode(model.generate(context, max_new_tokens=500)[0].tolist()))
