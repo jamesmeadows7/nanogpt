@@ -96,6 +96,19 @@ class MultiHeadAttention(nn.Module):
         return torch.cat([h(x) for h in self.heads], dim=-1)
 
 
+# simple linear layer followed by non-linearity
+class FeedForward(nn.Module):
+    def __init__(self, n_embed: int) -> None:
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(n_embed, n_embed),
+            nn.ReLU(),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)
+
+
 # language model
 class LanguageModel(nn.Module):
     def __init__(self) -> None:
@@ -106,6 +119,7 @@ class LanguageModel(nn.Module):
         self.sa_heads = MultiHeadAttention(
             4, n_embed // 4
         )  # 4 heads of 8-dimensional self-attention
+        self.ffwd = FeedForward(n_embed)
         self.lm_head = nn.Linear(n_embed, vocab_size)
 
     def forward(
@@ -120,6 +134,7 @@ class LanguageModel(nn.Module):
         )  # (T, C)
         x = tok_emb + pos_emb  # (B, T, C)
         x = self.sa_heads(x)  # apply one head of self-attention. (B, T, C)
+        x = self.ffwd(x)  # (B, T, C)
         logits = self.lm_head(x)  # (B, T, vocab_size)
 
         if targets is None:
