@@ -5,6 +5,8 @@ from torch.nn import functional as F
 # hyperparameters
 batch_size = 32  # independent sequences processed in parallel
 block_size = 8  # maximum context length
+max_iters = 3000
+learning_rate = 1e-2
 
 torch.manual_seed(1337)
 
@@ -78,12 +80,22 @@ class BigramLanguageModel(nn.Module):
         return idx
 
 
-xb, yb = get_batch("train")
+model = BigramLanguageModel(vocab_size)
 
-m = BigramLanguageModel(vocab_size)
-logits, loss = m(xb, yb)
-print(logits.shape)
-print(loss)
+# create PyTorch optimizer
+optimiser = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+
+for iter in range(max_iters):
+    # sample a batch of data
+    xb, yb = get_batch("train")
+
+    # evaluate the loss
+    logits, loss = model(xb, yb)
+    optimiser.zero_grad(set_to_none=True)
+    loss.backward()
+    optimiser.step()
+
+print(loss.item())
 
 idx = torch.zeros((1, 1), dtype=torch.long)
-print(decode(m.generate(idx, max_new_tokens=100)[0].tolist()))
+print(decode(model.generate(idx, max_new_tokens=500)[0].tolist()))
