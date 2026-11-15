@@ -7,6 +7,7 @@ batch_size = 32  # independent sequences processed in parallel
 block_size = 8  # maximum context length
 max_iters = 3000
 learning_rate = 1e-2
+eval_iters = 200
 
 torch.manual_seed(1337)
 
@@ -39,6 +40,21 @@ def get_batch(split: str) -> tuple[torch.Tensor, torch.Tensor]:
     x = torch.stack([data[i : i + block_size] for i in ix])
     y = torch.stack([data[i + 1 : i + block_size + 1] for i in ix])
     return x, y
+
+
+@torch.no_grad()
+def estimate_loss():
+    out = {}
+    model.eval()
+    for split in ["train", "val"]:
+        losses = torch.zeros(eval_iters)
+        for k in range(eval_iters):
+            X, Y = get_batch(split)
+            _, loss = model(X, Y)
+            losses[k] = loss.item()
+        out[split] = losses.mean()
+    model.train()
+    return out
 
 
 # simple bigram model
@@ -86,6 +102,13 @@ model = BigramLanguageModel(vocab_size)
 optimiser = torch.optim.AdamW(model.parameters(), lr=learning_rate)
 
 for iter in range(max_iters):
+    # every eval_interval iterations evaluate loss on train and val
+    if iter % eval_iters == 0:
+        losses = estimate_loss()
+        print(
+            f"step {iter}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}"
+        )
+
     # sample a batch of data
     xb, yb = get_batch("train")
 
@@ -95,7 +118,6 @@ for iter in range(max_iters):
     loss.backward()
     optimiser.step()
 
-print(loss.item())
-
-idx = torch.zeros((1, 1), dtype=torch.long)
-print(decode(model.generate(idx, max_new_tokens=500)[0].tolist()))
+# generate from model
+context = torch.zeros((1, 1), dtype=torch.long)
+print(decode(model.generate(context, max_new_tokens=500)[0].tolist()))
