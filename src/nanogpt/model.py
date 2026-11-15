@@ -4,14 +4,6 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-# training hyperparameters
-batch_size = 64  # independent sequences processed in parallel
-max_iters = 5000
-eval_interval = 500
-learning_rate = 3e-4
-device = "mps" if torch.mps.is_available() else "cpu"
-eval_iters = 200
-
 
 # model hyperparameters
 @dataclass
@@ -22,53 +14,6 @@ class GPTConfig:
     n_head: int = 4
     n_layer: int = 4
     dropout: float = 0.2
-
-
-class CharTokeniser:
-    def __init__(self, text: str) -> None:
-        chars = sorted(set(text))
-        self.vocab_size = len(chars)
-        self.stoi = {ch: i for i, ch in enumerate(chars)}
-        self.itos = {i: ch for i, ch in enumerate(chars)}
-
-    def encode(self, s: str) -> list[int]:
-        # take a string, output list of integers
-        return [self.stoi[c] for c in s]
-
-    def decode(self, ids: list[int]) -> str:
-        # take a list of integers, output a string
-        return "".join(self.itos[i] for i in ids)
-
-
-torch.manual_seed(1337)
-
-with open("data/tinyshakespeare.txt", "r", encoding="utf-8") as f:
-    text = f.read()
-
-tokeniser = CharTokeniser(text)
-config = GPTConfig(vocab_size=tokeniser.vocab_size)
-
-# split data into train and validation sets
-def train_val_split(
-    data: torch.Tensor, train_frac: float = 0.9
-) -> tuple[torch.Tensor, torch.Tensor]:
-    n = int(train_frac * len(data))
-    return data[:n], data[n:]
-
-
-# sample a random batch of inputs and targets
-def get_batch(
-    data: torch.Tensor, block_size: int, batch_size: int, device: str
-) -> tuple[torch.Tensor, torch.Tensor]:
-    ix = torch.randint(len(data) - block_size, (batch_size,))
-    x = torch.stack([data[i : i + block_size] for i in ix])
-    y = torch.stack([data[i + 1 : i + block_size + 1] for i in ix])
-    return x.to(device), y.to(device)
-
-
-# train and test splits
-data = torch.tensor(tokeniser.encode(text), dtype=torch.long)
-train_data, val_data = train_val_split(data)
 
 
 # one head of self-attention
@@ -201,47 +146,3 @@ class GPT(nn.Module):
             # append sampled index to the running sequence
             idx = torch.cat((idx, idx_next), dim=1)  # (B, T+1)
         return idx
-
-
-# average loss over eval_iters batches for each split
-@torch.no_grad()
-def estimate_loss(model: GPT, splits: dict[str, torch.Tensor]) -> dict[str, float]:
-    out = {}
-    model.eval()
-    for name, data in splits.items():
-        losses = torch.zeros(eval_iters)
-        for k in range(eval_iters):
-            X, Y = get_batch(data, model.config.block_size, batch_size, device)
-            _, loss = model(X, Y)
-            losses[k] = loss.item()
-        out[name] = losses.mean().item()
-    model.train()
-    return out
-
-
-model = GPT(config)
-model = model.to(device)
-
-# create PyTorch optimizer
-optimiser = torch.optim.AdamW(model.parameters(), lr=learning_rate)
-
-for iter in range(max_iters):
-    # every eval_interval iterations evaluate loss on train and val
-    if iter % eval_interval == 0:
-        losses = estimate_loss(model, {"train": train_data, "val": val_data})
-        print(
-            f"step {iter}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}"
-        )
-
-    # sample a batch of data
-    xb, yb = get_batch(train_data, config.block_size, batch_size, device)
-
-    # evaluate the loss
-    logits, loss = model(xb, yb)
-    optimiser.zero_grad(set_to_none=True)
-    loss.backward()
-    optimiser.step()
-
-# generate from model
-context = torch.zeros((1, 1), dtype=torch.long, device=device)
-print(tokeniser.decode(model.generate(context, max_new_tokens=500)[0].tolist()))
