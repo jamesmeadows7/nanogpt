@@ -48,37 +48,27 @@ with open("data/tinyshakespeare.txt", "r", encoding="utf-8") as f:
 tokeniser = CharTokeniser(text)
 config = GPTConfig(vocab_size=tokeniser.vocab_size)
 
-# train and test splits
-data = torch.tensor(tokeniser.encode(text), dtype=torch.long)
-n = int(0.9 * len(data))
-train_data = data[:n]
-val_data = data[n:]
+# split data into train and validation sets
+def train_val_split(
+    data: torch.Tensor, train_frac: float = 0.9
+) -> tuple[torch.Tensor, torch.Tensor]:
+    n = int(train_frac * len(data))
+    return data[:n], data[n:]
 
 
-# data loading
-def get_batch(split: str) -> tuple[torch.Tensor, torch.Tensor]:
-    data = train_data if split == "train" else val_data
-    block_size = config.block_size
+# sample a random batch of inputs and targets
+def get_batch(
+    data: torch.Tensor, block_size: int, batch_size: int, device: str
+) -> tuple[torch.Tensor, torch.Tensor]:
     ix = torch.randint(len(data) - block_size, (batch_size,))
     x = torch.stack([data[i : i + block_size] for i in ix])
     y = torch.stack([data[i + 1 : i + block_size + 1] for i in ix])
-    x, y = x.to(device), y.to(device)
-    return x, y
+    return x.to(device), y.to(device)
 
 
-@torch.no_grad()
-def estimate_loss():
-    out = {}
-    model.eval()
-    for split in ["train", "val"]:
-        losses = torch.zeros(eval_iters)
-        for k in range(eval_iters):
-            X, Y = get_batch(split)
-            _, loss = model(X, Y)
-            losses[k] = loss.item()
-        out[split] = losses.mean()
-    model.train()
-    return out
+# train and test splits
+data = torch.tensor(tokeniser.encode(text), dtype=torch.long)
+train_data, val_data = train_val_split(data)
 
 
 # one head of self-attention
@@ -213,6 +203,22 @@ class GPT(nn.Module):
         return idx
 
 
+# average loss over eval_iters batches for each split
+@torch.no_grad()
+def estimate_loss(model: GPT, splits: dict[str, torch.Tensor]) -> dict[str, float]:
+    out = {}
+    model.eval()
+    for name, data in splits.items():
+        losses = torch.zeros(eval_iters)
+        for k in range(eval_iters):
+            X, Y = get_batch(data, model.config.block_size, batch_size, device)
+            _, loss = model(X, Y)
+            losses[k] = loss.item()
+        out[name] = losses.mean().item()
+    model.train()
+    return out
+
+
 model = GPT(config)
 model = model.to(device)
 
@@ -222,13 +228,13 @@ optimiser = torch.optim.AdamW(model.parameters(), lr=learning_rate)
 for iter in range(max_iters):
     # every eval_interval iterations evaluate loss on train and val
     if iter % eval_interval == 0:
-        losses = estimate_loss()
+        losses = estimate_loss(model, {"train": train_data, "val": val_data})
         print(
             f"step {iter}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}"
         )
 
     # sample a batch of data
-    xb, yb = get_batch("train")
+    xb, yb = get_batch(train_data, config.block_size, batch_size, device)
 
     # evaluate the loss
     logits, loss = model(xb, yb)
