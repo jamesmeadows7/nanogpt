@@ -1,7 +1,9 @@
 import torch
+from torch import nn
+from torch.nn import functional as F
 
 # hyperparameters
-batch_size = 4  # independent sequences processed in parallel
+batch_size = 32  # independent sequences processed in parallel
 block_size = 8  # maximum context length
 
 torch.manual_seed(1337)
@@ -37,16 +39,33 @@ def get_batch(split: str) -> tuple[torch.Tensor, torch.Tensor]:
     return x, y
 
 
-xb, yb = get_batch("train")
-print("inputs:")
-print(xb.shape)
-print(xb)
-print("outputs:")
-print(yb.shape)
-print(yb)
+# simple bigram model
+class BigramLanguageModel(nn.Module):
+    def __init__(self, vocab_size: int) -> None:
+        super().__init__()
+        # read off logits for the next token using lookup table
+        self.token_embedding_table = nn.Embedding(vocab_size, vocab_size)
 
-for b in range(batch_size):
-    for t in range(block_size):
-        context = xb[b, : t + 1]
-        target = yb[b, t]
-        print(f"when input is {context.tolist()} the target: {target}")
+    def forward(
+        self, idx: torch.Tensor, targets: torch.Tensor | None = None
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        # idx and targets are both (B,T) tensor of integers
+        logits = self.token_embedding_table(idx)  # (B, T, C)
+
+        if targets is None:
+            loss = None
+        else:
+            B, T, C = logits.shape
+            logits = logits.view(B * T, C)
+            targets = targets.view(B * T)
+            loss = F.cross_entropy(logits, targets)
+
+        return logits, loss
+
+
+xb, yb = get_batch("train")
+
+m = BigramLanguageModel(vocab_size)
+logits, loss = m(xb, yb)
+print(logits.shape)
+print(loss)
