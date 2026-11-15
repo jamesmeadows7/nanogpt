@@ -109,6 +109,20 @@ class FeedForward(nn.Module):
         return self.net(x)
 
 
+# transformer block
+class Block(nn.Module):
+    def __init__(self, n_embed: int, n_head: int) -> None:
+        super().__init__()
+        head_size = n_embed // n_head
+        self.sa = MultiHeadAttention(n_head, head_size)
+        self.ffwd = FeedForward(n_embed)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.sa(x)
+        x = self.ffwd(x)
+        return x
+
+
 # language model
 class LanguageModel(nn.Module):
     def __init__(self) -> None:
@@ -116,10 +130,11 @@ class LanguageModel(nn.Module):
         # read off logits for the next token using lookup table
         self.token_embedding_table = nn.Embedding(vocab_size, n_embed)
         self.position_embedding_table = nn.Embedding(block_size, n_embed)
-        self.sa_heads = MultiHeadAttention(
-            4, n_embed // 4
-        )  # 4 heads of 8-dimensional self-attention
-        self.ffwd = FeedForward(n_embed)
+        self.blocks = nn.Sequential(
+            Block(n_embed, n_head=4),
+            Block(n_embed, n_head=4),
+            Block(n_embed, n_head=4),
+        )
         self.lm_head = nn.Linear(n_embed, vocab_size)
 
     def forward(
@@ -133,8 +148,7 @@ class LanguageModel(nn.Module):
             torch.arange(T, device=device)
         )  # (T, C)
         x = tok_emb + pos_emb  # (B, T, C)
-        x = self.sa_heads(x)  # apply one head of self-attention. (B, T, C)
-        x = self.ffwd(x)  # (B, T, C)
+        x = self.blocks(x)  # (B, T, C)
         logits = self.lm_head(x)  # (B, T, vocab_size)
 
         if targets is None:
