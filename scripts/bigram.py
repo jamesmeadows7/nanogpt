@@ -6,7 +6,9 @@ from torch.nn import functional as F
 batch_size = 32  # independent sequences processed in parallel
 block_size = 8  # maximum context length
 max_iters = 3000
+eval_interval = 200
 learning_rate = 1e-2
+device = "cpu"  # faster than mps for this small model
 eval_iters = 200
 
 torch.manual_seed(1337)
@@ -39,6 +41,7 @@ def get_batch(split: str) -> tuple[torch.Tensor, torch.Tensor]:
     ix = torch.randint(len(data) - block_size, (batch_size,))
     x = torch.stack([data[i : i + block_size] for i in ix])
     y = torch.stack([data[i + 1 : i + block_size + 1] for i in ix])
+    x, y = x.to(device), y.to(device)
     return x, y
 
 
@@ -97,13 +100,14 @@ class BigramLanguageModel(nn.Module):
 
 
 model = BigramLanguageModel(vocab_size)
+model = model.to(device)
 
 # create PyTorch optimizer
 optimiser = torch.optim.AdamW(model.parameters(), lr=learning_rate)
 
 for iter in range(max_iters):
     # every eval_interval iterations evaluate loss on train and val
-    if iter % eval_iters == 0:
+    if iter % eval_interval == 0:
         losses = estimate_loss()
         print(
             f"step {iter}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}"
@@ -119,5 +123,5 @@ for iter in range(max_iters):
     optimiser.step()
 
 # generate from model
-context = torch.zeros((1, 1), dtype=torch.long)
+context = torch.zeros((1, 1), dtype=torch.long, device=device)
 print(decode(model.generate(context, max_new_tokens=500)[0].tolist()))
