@@ -136,8 +136,7 @@ class Block(nn.Module):
         return x
 
 
-# language model
-class LanguageModel(nn.Module):
+class GPT(nn.Module):
     def __init__(self) -> None:
         super().__init__()
         # read off logits for the next token using lookup table
@@ -192,7 +191,7 @@ class LanguageModel(nn.Module):
         return idx
 
 
-model = LanguageModel()
+model = GPT()
 model = model.to(device)
 
 # create PyTorch optimizer
