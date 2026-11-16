@@ -49,7 +49,7 @@ def main() -> None:
 
     for step in range(max_iters):
         # every eval_interval steps evaluate loss on train and val
-        if step % eval_interval == 0:
+        if step % eval_interval == 0 or step == max_iters - 1:
             losses = estimate_loss(model, {"train": train_data, "val": val_data})
             print(
                 f"step {step}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}"
@@ -66,7 +66,7 @@ def main() -> None:
 
     # generate from model
     context = torch.zeros((1, 1), dtype=torch.long, device=device)
-    print(tokeniser.decode(model.generate(context, max_new_tokens=500)[0].tolist()))
+    print(tokeniser.decode(model.generate(context, max_new_tokens=1000)[0].tolist()))
 
 
 if __name__ == "__main__":
